@@ -1,0 +1,150 @@
+1.	Is let in L3 a special form? Justify your answer.
+
+Both answers are correct depending on explanation
+
+- no because the interpreter of L3 doesnt support evaluation of let expression directly
+and instead it rewrites let expressions into apllications so that let expressions are in fact 
+evaluated like application expression.
+
+- yes the interpreter of L3 has to rewrite let into an application -- this means that there is a special rule 
+before the syntactic form of let expressions is actually evaluated.
+
+- yes because a let expression is NOT evaluated like a "non-special form" (which is an application expression) - 
+some of the components of the compound let expression are not evaluated at all (the parts of the bindings that are varDecl).
+
+
+2.	List four types of semantic errors that can be raised when executing an L3 program – with an example for each type.
+
+
+1) type error in arguments passed to primitive operators:  example (+ #t 5 )
+2) runtime error caused by specific arguments to primitive operators:  example (/ 10 0)
+3) application of an operator value which is neither primOp nor closure: example (3 5)
+4) wrong number of arguments in an application expression: example (L3 (define foo (lambda(x) x)) (foo))
+
+
+3.1 Extend the type definitions of the AST to accept values.
+
+<program> ::= (L3 <exp>+) // Program(exps:List(Exp))
+<exp> ::= <define> | <cexp>          / DefExp | CExp
+<define> ::= ( define <var> <cexp> ) / DefExp(var:VarDecl, val:CExp)
+<var> ::= <identifier>               / VarRef(var:string)
+<cexp> ::= <num-exp>                 / NumExp(val:number)
+	| <bool-exp>                     / BoolExp(val:boolean)
+	| <str-exp>                      / StrExp(val:string)
+	| ( lambda ( <var>* ) <cexp>+ )  / ProcExp(params:VarDecl[], body:CExp[]))
+	| ( if <cexp> <cexp> <cexp> )    / IfExp(test: CExp, then: CExp, alt: CExp)
+	| ( let ( binding* ) <cexp>+ )   / LetExp(bindings:Binding[], body:CExp[]))
+	| ( quote <sexp> )               / LitExp(val:SExp)
+	| ( <cexp> <cexp>* )             / AppExp(operator:CExp, operands:CExp[]))
+	| <sexp>                         / ########## THIS IS THE CHANGE
+<binding> ::= ( <var> <cexp> ) / Binding(var:VarDecl, val:Cexp)
+<prim-op> ::= + | - | * | / | < | > | = | not | and | or | eq? | string=?
+				| cons | car | cdr | pair? | number? | list | boolean? | symbol? | string?
+<num-exp> ::= a number token
+<bool-exp> ::= #t | #f
+<str-exp> ::= a sequence of characters between double quotes
+<var-ref> ::= an identifier token
+<var-decl> ::= an identifier token
+<sexp> ::= symbol | number | bool | string | (<sexp>+ . <sexp>) | ( <sexp>* )
+
+
+3.2 Which parts of the interpreter need to be changed?
+
+a. The type definition of <cexp> in L5-ast
+b. https://github.com/bguppl/interpreters/blob/master/src/L3/L3-eval.ts#L63 applyClosure needs to be changed so that it does NOT invoke valueToLitExp()
+   and instead it substitutes the values directly into the body:
+   return evalSequence(substitute(body, vars, args), env); // args instead of litArgs
+c. A new case must be added to the main function L3applicativeEval() for the case where the exp is of type SExp - in which case it returns itself without change.
+   https://github.com/bguppl/interpreters/blob/master/src/L3/L3-eval.ts#L22
+d. A new case must be added to the substitute function 
+   https://github.com/bguppl/interpreters/blob/master/src/L3/substitute.ts#L25
+   for the case where the parameter e is of type SExp.
+   
+
+3.3 Which of the two options is preferable? (use valueToLitExp or change types)
+
+Using valueToLitExp provides a better type definition for ASTs -- because the appearance of SExp values inside the AST cannot be created in concrete syntax.
+It is an artifact of the evaluation process which does not correspond to a "true" AST.  
+
+The implementation using extended types depends on the capability of the meta-language (JS in our case) to recognize value types at runtime (without tags).
+In languages like C which do not provide such capability, we would need to add an explicit tag in the substitution -- which is very similar to what we do in valueToLitExp.
+
+
+
+4. The valueToLitExp function is not needed in the normal evaluation strategy interpreter because arguments are not evaluated before they are passed to closures.
+   Therefore, applyClosure receives CExps as arguments and replaces varRefs in the body with CExps -- which is correct according to the type definition of CExp.
+
+
+5. Example where normal order will execute faster than applicative order
+
+Ex1: 
+(L3 
+	(define loop (lambda (x) (loop x)))
+	(define f (lambda (x) 1))
+	(f (loop 1)))
+	
+normal order will return 1 in one application step 
+applicative order will enter into an infinite loop
+
+Ex2:
+(L3
+	(define square (lambda (x) (* x x)))
+	(define g (lambda (x y) (if (> x 10) x y)))
+	(g 100 (square 1000)))
+	
+normal order will not evaluate (square 1000) and return 100 directly without any computation.
+applicative order will evaluate (square 1000) and return 100.
+
+
+
+Example where evaluation in applicative order is faster than normal:
+
+(define  fib (lambda(n)
+               (if (< n 2) n (+ (fib (- n 1))(fib (- n 2))))))
+
+(define mul (lambda (x) (* x x)))
+(mul (fib 20))
+
+normal order will compute (fib 20) twice.
+applicative order will compute it only once.
+
+
+PART III
+
+3.1 
+
+#lang lazy
+(define x (-))
+x
+
+This returns #<promise:x>
+
+#lang lazy
+(define x (-))
+1
+
+This returns 1
+
+In the case of L3-normal, the given test shows that we evaluate x - 
+which will generate an error (wrong number of arguments for the primitive operator) 
+EVEN THOUGH we do not use the variable x later.
+
+The solution is to implement a data structure equivalent to what #lazy calls "promise" 
+(which is not the same as what we discussed as Promises in the context of JavaScript later in class).
+This data structure consists of a pair <cexp,env> which is what is bound to variables when they are
+defined by define or by closure application.
+
+One delicate point is the behavior of the first case: when we compute (define x (-)), x is not
+used, and hence no error is triggered.  But when we return x as the final value of the program,
+we expect it to be passed to the Print function of the read-eval-print loop (REPL) of the interpreter.
+If this Print function "knows" about promises, it should behave like a primitive - and it should
+evaluate x -- at this point, it should force the evaluation of the promise and fail.
+In the case of #lazy -- the REPL is that of Racket - which does not "know" about promises, hence
+print does not force the evaluation of the promise.
+
+In our solution, the first scenario will fail -- which is correct according to the semantics of
+normal evaluation.  
+
+In the grading - we accept both behaviors for this specific test scenario.
+
+
